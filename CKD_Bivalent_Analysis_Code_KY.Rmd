@@ -1,0 +1,670 @@
+---
+title: "Omicron variant Neutralizing Antibodies Following BNT162b2 BA.4/5 versus mRNA-1273 BA.1 Bivalent Vaccination in Patients with End-Stage Kidney Disease"
+date: '`r paste(substring(date(),1,10), substring(date(),21,24))`'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: '2'
+  pdf_document:
+    fig_caption: yes
+    highlight: tango
+    keep_tex: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+  word_document:
+    toc: yes
+    toc_depth: '2'
+---
+
+```{r, echo = FALSE, results = FALSE, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = T, 
+                      message = F, 
+                      warning = F, 
+                      fig.align='center',
+                      fig.pos = 'h')
+
+library(ggplot2)
+library(knitr)
+library(lmtest)
+library(car)
+library(lmerTest)
+library(nlme)
+library(lme4)
+library(ggpubr)
+library(geepack)
+library(redres)
+library(survival)
+library(survminer)
+library(cmprsk)
+library(reshape2)
+library(table1)
+library(data.table)
+library(gtsummary)
+library(tidyverse)
+
+set.seed(123)
+
+setwd(".")
+
+```
+
+## Data Preparation
+
+```{r}
+# Load data
+Baseline_VOC_CKDHC_Removed <- read.csv(file=".",as.is=T,stringsAsFactors=F,na.strings = c("","NA","N/A","?","#VALUE!"))
+
+VOC_Lenti_Service_Dialysis_XBB1.5 <- read.csv(file=".",as.is=T,stringsAsFactors=F,na.strings = c("","NA","N/A","?","#VALUE!"))
+
+BV_VLP_ELISA <- read.csv(file=".",as.is=T,stringsAsFactors=F,na.strings = c("","NA","N/A","?","#VALUE!"))
+
+Bivalent_Baselines <- read.csv(file=".",as.is=T,stringsAsFactors=F,na.strings = c("","NA","N/A","?","#VALUE!"))
+
+# Data manipulation
+
+Baseline_VOC_CKDHC_Removed$time_point_final <- Baseline_VOC_CKDHC_Removed$time_point
+Baseline_VOC_CKDHC_Removed$time_point_final[Baseline_VOC_CKDHC_Removed$time_point_final %in% c("BV Dose 5 +1 week", "BV Dose 5 +10 days", "BV Dose 5 +13 days")] <- "BV Dose 5 +1 month"
+Baseline_VOC_CKDHC_Removed$time_point_final[Baseline_VOC_CKDHC_Removed$time_point_final=="BV Dose 4 + 1 month"] <- "BV Dose 4 +1 month"
+Baseline_VOC_CKDHC_Removed$time_point_final <- ifelse(grepl("Pre",Baseline_VOC_CKDHC_Removed$time_point_final),"BV Pre-Dose","BV Dose +1 month")
+Baseline_VOC_CKDHC_Removed$time_point_final <- factor(Baseline_VOC_CKDHC_Removed$time_point_final, levels=c("BV Pre-Dose","BV Dose +1 month"), labels=c("BV Pre-Dose","BV Dose +1 month"))
+
+## XBB data set
+VOC_Lenti_Service_Dialysis_XBB1.5_Removed <- VOC_Lenti_Service_Dialysis_XBB1.5[!(VOC_Lenti_Service_Dialysis_XBB1.5$Study_ID %in% c("820-21", "820-22", "UHT- 159_D5", "UHT- 159_1MPD5", "CKD0319")),]
+
+## XBB1.5 data for 1062-56 at BV Pre-Dose 5
+VOC_Lenti_Service_Dialysis_XBB1.5_Removed$XBB15_ID50[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$Study_ID=="1062-56"&VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point=="BV Pre-Dose 5"] <- 0
+VOC_Lenti_Service_Dialysis_XBB1.5_Removed$XBB15_Serum[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$Study_ID=="1062-56"&VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point=="BV Pre-Dose 5"] <- 0
+VOC_Lenti_Service_Dialysis_XBB1.5_Removed$XBB15_Log[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$Study_ID=="1062-56"&VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point=="BV Pre-Dose 5"] <- 1
+
+## CKD0319 to 1062-31 
+VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point_final <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point
+VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point_final[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point_final %in% c("BV Dose 5 +1 week", "BV Dose 5 +10 days", "BV Dose 5 +13 days")] <- "BV Dose 5 +1 month"
+VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point_final <- ifelse(grepl("Pre|pre",VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point_final),"BV Pre-Dose","BV Dose +1 month")
+VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point_final <- factor(VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point_final, levels=c("BV Pre-Dose","BV Dose +1 month"), labels=c("BV Pre-Dose","BV Dose +1 month"))
+
+## Merge 
+Baseline_VOC_CKDHC_Removed$ID_time <- interaction(Baseline_VOC_CKDHC_Removed$Study_ID, Baseline_VOC_CKDHC_Removed$time_point_final)
+VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time <- interaction(VOC_Lenti_Service_Dialysis_XBB1.5_Removed$Study_ID, VOC_Lenti_Service_Dialysis_XBB1.5_Removed$time_point_final)
+
+for (i in 1:nrow(Baseline_VOC_CKDHC_Removed)){
+    Baseline_VOC_CKDHC_Removed$WT_ID50[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$WT_ID50[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$WT_Serum[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$WT_Serum[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$WT_Log[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$WT_Log[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+  
+    Baseline_VOC_CKDHC_Removed$BA1_ID50[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$BA1_ID50[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$BA1_Serum[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$BA1_Serum[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$BA1_Log[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$BA1_Log[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    
+    Baseline_VOC_CKDHC_Removed$BA5_ID50[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$BA5_ID50[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$BA5_Serum[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$BA5_Serum[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$BA5_Log[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$BA5_Log[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    
+    Baseline_VOC_CKDHC_Removed$BQ11_ID50[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$BQ11_ID50[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$BQ11_Serum[i]<-VOC_Lenti_Service_Dialysis_XBB1.5_Removed$BQ11_Serum[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$BQ11_Log[i] <- VOC_Lenti_Service_Dialysis_XBB1.5_Removed$BQ11_Log[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    
+    Baseline_VOC_CKDHC_Removed$XBB15_ID50[i]<-VOC_Lenti_Service_Dialysis_XBB1.5_Removed$XBB15_ID50[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$XBB15_Serum[i]<-VOC_Lenti_Service_Dialysis_XBB1.5_Removed$XBB15_Serum[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+    Baseline_VOC_CKDHC_Removed$XBB15_Log[i]<-VOC_Lenti_Service_Dialysis_XBB1.5_Removed$XBB15_Log[VOC_Lenti_Service_Dialysis_XBB1.5_Removed$ID_time==Baseline_VOC_CKDHC_Removed$ID_time[i]]
+}
+
+Baseline_VOC_CKDHC_Removed$DoseBivalentVaccine[Baseline_VOC_CKDHC_Removed$Study_ID=="COVHD-078"] <- 4
+Baseline_VOC_CKDHC_Removed$Study_ID2 <- Baseline_VOC_CKDHC_Removed$Study_ID
+Baseline_VOC_CKDHC_Removed$Study_ID2 <- gsub("1MPD","D",Baseline_VOC_CKDHC_Removed$Study_ID2)
+Baseline_VOC_CKDHC_Removed$BivalentVaccineType[Baseline_VOC_CKDHC_Removed$Study_ID=="COVHD-139"] <- "Pfizer"
+
+## NP positive from ELISA
+BV_VLP_ELISA$time_point_final <- BV_VLP_ELISA$Timepoint
+BV_VLP_ELISA$time_point_final[BV_VLP_ELISA$time_point_final %in% c("BV Dose 5 +1 week", "BV Dose 5 +10 days", "BV Dose 5 +13 days")] <- "BV Dose 5 +1 month"
+BV_VLP_ELISA$time_point_final <- ifelse(grepl("Pre|pre",BV_VLP_ELISA$time_point_final),"BV Pre-Dose","BV Dose +1 month")
+BV_VLP_ELISA$time_point_final <- factor(BV_VLP_ELISA$time_point_final, levels=c("BV Pre-Dose","BV Dose +1 month"), labels=c("BV Pre-Dose","BV Dose +1 month"))
+BV_VLP_ELISA$participant_id_2 <- NA
+for (i in 1:nrow(BV_VLP_ELISA)){
+  if (grepl("UHT",BV_VLP_ELISA$participant_id[i])){
+    BV_VLP_ELISA$participant_id_2[i] <- paste0(BV_VLP_ELISA$participant_id[i],"_D5")
+  } else {
+    BV_VLP_ELISA$participant_id_2[i] <- BV_VLP_ELISA$participant_id[i]
+  }
+}
+BV_VLP_ELISA$participant_id_2[BV_VLP_ELISA$participant_id_2=="820-03"] <- "820-3"
+BV_VLP_ELISA$participant_id_2[BV_VLP_ELISA$participant_id_2=="UHT-051_D5"] <- "UHT-051_D4"
+BV_VLP_ELISA <- BV_VLP_ELISA[!(BV_VLP_ELISA$participant_id_2 %in% c("820-21","820-22","UHT-159_D5")),]
+
+BV_VLP_ELISA$ID_time <- interaction(BV_VLP_ELISA$participant_id_2, BV_VLP_ELISA$time_point_final)
+BV_VLP_ELISA$NP_positive_ELISA <- ifelse(BV_VLP_ELISA$NP.IgG.0.0625 >= 0.164, "Yes", "No")
+
+Baseline_VOC_CKDHC_Removed$ID2_time <- interaction(Baseline_VOC_CKDHC_Removed$Study_ID2, Baseline_VOC_CKDHC_Removed$time_point_final)
+BV_VLP_ELISA <- BV_VLP_ELISA[BV_VLP_ELISA$ID_time %in% Baseline_VOC_CKDHC_Removed$ID2_time,]
+Baseline_VOC_CKDHC_Removed$NP_positive_ELISA <- NA
+Baseline_VOC_CKDHC_Removed$NP.IgG.0.0625 <- NA
+for (i in 1:nrow(Baseline_VOC_CKDHC_Removed)){
+    Baseline_VOC_CKDHC_Removed$NP_positive_ELISA[i]<-BV_VLP_ELISA$NP_positive_ELISA[BV_VLP_ELISA$ID_time==Baseline_VOC_CKDHC_Removed$ID2_time[i]]
+    Baseline_VOC_CKDHC_Removed$NP.IgG.0.0625[i]<-BV_VLP_ELISA$NP.IgG.0.0625[BV_VLP_ELISA$ID_time==Baseline_VOC_CKDHC_Removed$ID2_time[i]]
+}
+```
+
+## Baseline characteristics
+
+```{r}
+# creating baseline table
+Bivalent_Baselines$BivalentVaccineType[Bivalent_Baselines$Study_ID=="COVHD-139"] <- "Pfizer"
+## create an interaction variable of agegrp and trt
+Bivalent_Baselines$Time_Vaccine <- interaction(Bivalent_Baselines$BivalentVaccineType)
+Bivalent_Baselines <- Bivalent_Baselines[Bivalent_Baselines$BeforeAfter=="Pre",]
+
+Bivalent_Baselines2 <- Bivalent_Baselines %>% select(BeforeAfter, FirstVaccineType, SecondVaccineType, ThirdVaccineType, FourthVaccineType, FifthVaccineType, DoseBivalentVaccine, BivalentVaccineType, PatientType, Age, Sex, PriorCOVID, Days_PostVaccine, VascularAccess, DialysisModality, Race, Cause_CKD, COVID19_REDCAP, Immunosuppression,Prednisone, Mycophenolate, Calcineurin, Coronary, CHF, CVD, PVD, Malignancy, COPD, HTN, Smoker_Current, HepatitisB_Nonresponder, ABO, Time_Vaccine, Immunosuppression) %>%
+  
+  tbl_summary(by = Time_Vaccine, 
+              missing_text = "(Missing)") %>%
+  
+  add_overall() %>%
+  add_n() %>%
+  modify_header(label ~ "**Variable**") %>%
+  modify_caption("**Table 1. Patient Characteristics**") %>%  
+  bold_labels()  
+ 
+Bivalent_Baselines2
+```
+
+# WT, BA.1, BA.5, BQ1.1 and XBB.1.5 Outcomes
+
+## Descriptive statistics
+
+```{r, echo = TRUE, results = TRUE}
+Baseline_VOC_CKDHC_Removed$Time_Vaccine <- interaction(Baseline_VOC_CKDHC_Removed$time_point_final, Baseline_VOC_CKDHC_Removed$BivalentVaccineType)
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed[,grepl("_ID50|_Serum|_Log",colnames(Baseline_VOC_CKDHC_Removed)) &
+                                                                            !grepl("XBB_|Serology",
+                                                                                  colnames(Baseline_VOC_CKDHC_Removed))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | time_point_final, ",
+                      "data=Baseline_VOC_CKDHC_Removed, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom, ",
+                      "overall='Overall', ",
+                      "caption = 'Dialysis samples against Log10 WT, BA.1, BA.5, BQ1.1 and XBB.1.5 grouped by Pre and Post Bivalent Dose')", sep="")))
+```
+```{r, echo = TRUE, results = TRUE}
+Baseline_VOC_CKDHC_Removed_Wide <- reshape(Baseline_VOC_CKDHC_Removed, idvar = "Study_ID2", timevar = c("time_point_final"), direction = "wide")
+Baseline_VOC_CKDHC_Removed_Wide$BivalentVaccineType <- factor((Baseline_VOC_CKDHC_Removed_Wide$`BivalentVaccineType.BV Pre-Dose`), levels=c("Pfizer","Moderna","P-Value"), labels=c("Pfizer","Moderna","P-Value"))
+
+rndr <- function(x, name, ...) {
+  if (length(x) == 0) {
+    y <- Baseline_VOC_CKDHC_Removed_Wide[[name]]
+    s <- rep("", length(render.default(x=y, name=name, ...)))
+    if (is.numeric(y)) {
+      p <- t.test(y ~ Baseline_VOC_CKDHC_Removed_Wide$BivalentVaccineType)$p.value
+    } else {
+      p <- fisher.test(table(y, droplevels(Baseline_VOC_CKDHC_Removed_Wide$BivalentVaccineType)))$p.value}
+    s[2] <- sub("<", "&lt;", format.pval(p, digits=3, eps=0.001))
+    s
+  } else {
+    render.default(x=x, name=name, digits=5, ...)
+  }
+}
+rndr.strat <- function(label, n, ...) {
+  ifelse(n==0, label, render.strat.default(label, n, ...))
+}
+
+render.continuous.custom <- function(x, ...) {
+  attr(x, "label") <- NULL
+  c("",
+    "Mean (SD)" = paste0(format(round(mean(x, na.rm = T), 5), nsmall = 2)," (", format(round(sd(x, na.rm = T), 5), nsmall = 2),")"), 
+    "Median (IQR)" = paste0(format(round(median(x, na.rm = T), 5), nsmall = 2)," (", format(round(IQR(x, na.rm = T),   5), nsmall = 2),")"), 
+    "[25% Quantile, 75% Quantile]"   = paste0("[", format(round(quantile(x, 0.25, na.rm = T), 5), nsmall = 2), ", ", format(round(quantile(x, 0.75, na.rm = T), 5), nsmall = 2),"]")
+  )
+}
+
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_Wide[,grepl("_ID50|_Serum|_Log",colnames(Baseline_VOC_CKDHC_Removed_Wide)) &
+                                                                            !grepl("XBB_|Serology|original",
+                                                                                  colnames(Baseline_VOC_CKDHC_Removed_Wide))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | BivalentVaccineType, ",
+                      "data=Baseline_VOC_CKDHC_Removed_Wide, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom, ",
+                      "overall='Overall', ",
+                      "caption = 'Dialysis samples against WT, BA.1, BA.5, BQ1.1 and XBB.1.5 grouped by bivalent vaccine type')", sep="")))
+```
+```{r, echo = TRUE, results = TRUE}
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_Wide[,grepl("_ID50|_Serum|_Log",colnames(Baseline_VOC_CKDHC_Removed_Wide)) &
+                                                                            !grepl("XBB_|Serology|original",
+                                                                                  colnames(Baseline_VOC_CKDHC_Removed_Wide))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | `DoseBivalentVaccine.BV Pre-Dose`, ",
+                      "data=Baseline_VOC_CKDHC_Removed_Wide, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom, ",
+                      "overall='Overall', ",
+                      "caption = 'Dialysis samples against WT, BA.1, BA.5, BQ1.1 and XBB.1.5 grouped by bivalent vaccine type')", sep="")))
+```
+```{r, echo = TRUE, results = TRUE}
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_Wide[,grepl("_ID50|_Serum|_Log",colnames(Baseline_VOC_CKDHC_Removed_Wide)) &
+                                                                            !grepl("XBB_|Serology|original",
+                                                                                  colnames(Baseline_VOC_CKDHC_Removed_Wide))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | `PriorCOVID.BV Pre-Dose`, ",
+                      "data=Baseline_VOC_CKDHC_Removed_Wide, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom, ",
+                      "overall='Overall', ",
+                      "caption = 'Dialysis samples against WT, BA.1, BA.5, BQ1.1 and XBB.1.5 grouped by bivalent vaccine type')", sep="")))
+```
+```{r, echo = TRUE, results = TRUE}
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_Wide[,grepl("_ID50|_Serum|_Log",colnames(Baseline_VOC_CKDHC_Removed_Wide)) &
+                                                                            !grepl("XBB_|Serology|original",
+                                                                                  colnames(Baseline_VOC_CKDHC_Removed_Wide))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | `NP_positive_ELISA.BV Dose +1 month`, ",
+                      "data=Baseline_VOC_CKDHC_Removed_Wide, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom, ",
+                      "overall='Overall', ",
+                      "caption = 'Dialysis samples against WT, BA.1, BA.5, BQ1.1 and XBB.1.5 grouped by anti-nucleocapsid status')", sep="")))
+```
+```{r, echo = TRUE, results = TRUE}
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_Wide[,grepl("_ID50|_Serum|_Log",colnames(Baseline_VOC_CKDHC_Removed_Wide)) &
+                                                                            !grepl("XBB_|Serology|original",
+                                                                                  colnames(Baseline_VOC_CKDHC_Removed_Wide))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | `PatientType.BV Pre-Dose`, ",
+                      "data=Baseline_VOC_CKDHC_Removed_Wide, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom, ",
+                      "overall='Overall', ",
+                      "caption = 'Dialysis samples against WT, BA.1, BA.5, BQ1.1 and XBB.1.5 grouped by patient type')", sep="")))
+```
+```{r, echo = TRUE, results = TRUE}
+Baseline_VOC_CKDHC_Removed$Time_Vaccine <- interaction(Baseline_VOC_CKDHC_Removed$time_point_final, Baseline_VOC_CKDHC_Removed$BivalentVaccineType)
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed[,grepl("_ID50|_Serum|_Log",colnames(Baseline_VOC_CKDHC_Removed)) &
+                                                                            !grepl("XBB_|Serology",
+                                                                                  colnames(Baseline_VOC_CKDHC_Removed))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | Time_Vaccine, ",
+                      "data=Baseline_VOC_CKDHC_Removed, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom, ",
+                      "overall='Overall', ",
+                      "caption = 'Dialysis samples against WT, BA.1, BA.5, BQ1.1 and XBB.1.5 grouped by bivalent vaccine type and time point')", sep="")))
+```
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed_plot_long$time_point_plot <- factor(Baseline_VOC_CKDHC_Removed_plot_long$time_point_final,levels=c("BV Pre-Dose","BV Dose +1 month"), labels = c("Prior to BV", "BV + 1 month")) 
+Baseline_VOC_CKDHC_Removed_plot_long$BivalentVaccineType_plot <- factor(Baseline_VOC_CKDHC_Removed_plot_long$BivalentVaccineType,levels=c("Pfizer","Moderna"), labels = c("BNT162b2","mRNA-1273")) 
+Baseline_VOC_CKDHC_Removed_plot_long$`VLP Type` <- factor(Baseline_VOC_CKDHC_Removed_plot_long$variable,levels=c("WT_Log","BA1_Log","BA5_Log","BQ11_Log","XBB15_Log"), labels = c("Wild-type","BA.1","BA.5","BQ1.1","XBB.1.5")) 
+ggplot(data = Baseline_VOC_CKDHC_Removed_plot_long, mapping = aes(x = time_point_plot, y = value, 
+                                            group = Study_ID2, color=BivalentVaccineType_plot)) +
+  facet_wrap(~`VLP Type`, labeller=label_value, nrow=1, ncol = 5, scales = "free_x") +
+  geom_point(size=0.5)+
+  # stat_n_text()+
+  geom_line(size=0.5,alpha=0.1) +
+  scale_color_manual(labels = c("BNT162b2","mRNA-1273"),
+                     values = c("#F8766D", "#00BFC4")
+                     ) +
+  # geom_line(data = gaps, aes(group = group), linetype = "dashed") +
+  ggtitle("Spagetti Plots for WT, BA.1, BA.5, BQ1.1 and XBB.1.5 Trajectory") +
+  labs(x="Timepoint",y=expression("Neutralization Capacity (log"["10"]~"ID"["50"]~")")) +
+  guides(color=guide_legend(title="Bivalent vaccine"),fill = FALSE) +
+  geom_smooth(method='loess', se=FALSE, aes(group=BivalentVaccineType_plot, colour=BivalentVaccineType_plot, fill=BivalentVaccineType_plot)) + 
+  theme(axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5))
+```
+```{r, warning = FALSE}
+sample_count_table <- 
+  aggregate(Baseline_VOC_CKDHC_Removed_plot_long$value, by=list(Baseline_VOC_CKDHC_Removed_plot_long$variable,Baseline_VOC_CKDHC_Removed_plot_long$time_point_final,Baseline_VOC_CKDHC_Removed_plot_long$BivalentVaccineType),
+            function(x) {sum(!is.na(x), na.rm = TRUE)})
+colnames(sample_count_table) <- c("VLP Type" ,"Time Points", "Count")
+kable(sample_count_table, caption = "Sample Count for Log Transformed VLP")
+
+Baseline_VOC_CKDHC_Removed$BivalentVaccineType_fac <- factor(Baseline_VOC_CKDHC_Removed$BivalentVaccineType,levels=c("Pfizer","Moderna"))
+```
+
+### Unadjusted Models 
+
+```{r, warning = FALSE}
+model_unadjust_WT <- lmer(WT_Log ~ BivalentVaccineType_fac + time_point_final + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_unadjust_WT)
+```
+
+### Adjusted Models
+
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed$NPPositive_fac <- factor(Baseline_VOC_CKDHC_Removed$NPPositive,levels=c(0,1), labels = c("No","Yes"))
+model_adjust_WT_2 <- lmer(WT_Log ~ BivalentVaccineType_fac + time_point_final + DoseBivalentVaccine + CKDCategory + NPPositive_fac + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_adjust_WT_2)
+```
+
+### Unadjusted Models for BA1
+
+```{r, warning = FALSE}
+model_unadjust_BA1 <- lmer(BA1_Log ~ BivalentVaccineType_fac + time_point_final + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_unadjust_BA1)
+```
+### Adjusted Models for BA1
+
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed$NPPositive_fac <- factor(Baseline_VOC_CKDHC_Removed$NPPositive,levels=c(0,1), labels = c("No","Yes"))
+model_adjust_BA1_2 <- lmer(BA1_Log ~ BivalentVaccineType_fac + time_point_final + DoseBivalentVaccine + CKDCategory + NPPositive_fac + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_adjust_BA1_2)
+```
+
+### Unadjusted Models for BA5
+
+```{r, warning = FALSE}
+model_unadjust_BA5 <- lmer(BA5_Log ~ BivalentVaccineType_fac + time_point_final + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_unadjust_BA5)
+```
+### Adjusted Models for BA5
+
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed$NPPositive_fac <- factor(Baseline_VOC_CKDHC_Removed$NPPositive,levels=c(0,1), labels = c("No","Yes"))
+model_adjust_BA5_2 <- lmer(BA5_Log ~ BivalentVaccineType_fac + time_point_final + DoseBivalentVaccine + CKDCategory + NPPositive_fac + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_adjust_BA5_2)
+```
+### Unadjusted Models for BQ11
+
+```{r, warning = FALSE}
+model_unadjust_BQ11 <- lmer(BQ11_Log ~ BivalentVaccineType_fac + time_point_final + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_unadjust_BQ11)
+```
+### Adjusted Models for BQ11
+
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed$NPPositive_fac <- factor(Baseline_VOC_CKDHC_Removed$NPPositive,levels=c(0,1), labels = c("No","Yes"))
+model_adjust_BQ11_2 <- lmer(BQ11_Log ~ BivalentVaccineType_fac + time_point_final + DoseBivalentVaccine + CKDCategory + NPPositive_fac + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_adjust_BQ11_2)
+```
+### Unadjusted Models for XBB15
+
+```{r, warning = FALSE}
+model_unadjust_XBB15 <- lmer(XBB15_Log ~ BivalentVaccineType_fac + time_point_final + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_unadjust_XBB15)
+```
+### Adjusted Models for XBB15
+
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed$NPPositive_fac <- factor(Baseline_VOC_CKDHC_Removed$NPPositive,levels=c(0,1), labels = c("No","Yes"))
+model_adjust_XBB15_2 <- lmer(XBB15_Log ~ BivalentVaccineType_fac + time_point_final + DoseBivalentVaccine + CKDCategory + NPPositive_fac + (1|Study_ID2),
+                    data = Baseline_VOC_CKDHC_Removed)
+summary(model_adjust_XBB15_2)
+```
+# Fold decrease of BA.1, BA.5, BQ1.1 and XBB.1.5 comparing with wild-type
+## Descriptive statistics 
+
+```{r, echo = TRUE, results = TRUE}
+# Calculate ID50 fold changes 
+Baseline_VOC_CKDHC_Removed$WT_BA1_fold_change <- Baseline_VOC_CKDHC_Removed$BA1_ID50/Baseline_VOC_CKDHC_Removed$WT_ID50
+Baseline_VOC_CKDHC_Removed$WT_BA5_fold_change <- Baseline_VOC_CKDHC_Removed$BA5_ID50/Baseline_VOC_CKDHC_Removed$WT_ID50
+Baseline_VOC_CKDHC_Removed$WT_BQ11_fold_change <- Baseline_VOC_CKDHC_Removed$BQ11_ID50/Baseline_VOC_CKDHC_Removed$WT_ID50
+Baseline_VOC_CKDHC_Removed$WT_XBB15_fold_change <- Baseline_VOC_CKDHC_Removed$XBB15_ID50/Baseline_VOC_CKDHC_Removed$WT_ID50
+  
+# Calculate ID50  fold changes 
+Baseline_VOC_CKDHC_Removed$WT_BA1_Serum_fold_change <- Baseline_VOC_CKDHC_Removed$BA1_Serum/Baseline_VOC_CKDHC_Removed$WT_Serum
+Baseline_VOC_CKDHC_Removed$WT_BA5_Serum_fold_change <- Baseline_VOC_CKDHC_Removed$BA5_Serum/Baseline_VOC_CKDHC_Removed$WT_Serum
+Baseline_VOC_CKDHC_Removed$WT_BQ11_Serum_fold_change <- Baseline_VOC_CKDHC_Removed$BQ11_Serum/Baseline_VOC_CKDHC_Removed$WT_Serum
+Baseline_VOC_CKDHC_Removed$WT_XBB15_Serum_fold_change <- Baseline_VOC_CKDHC_Removed$XBB15_Serum/Baseline_VOC_CKDHC_Removed$WT_Serum
+
+# Log-transformed fold changes (log base 10)
+Baseline_VOC_CKDHC_Removed$WT_BA1_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed$WT_BA1_fold_change)
+Baseline_VOC_CKDHC_Removed$WT_BA5_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed$WT_BA5_fold_change)
+Baseline_VOC_CKDHC_Removed$WT_BQ11_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed$WT_BQ11_fold_change)
+Baseline_VOC_CKDHC_Removed$WT_XBB15_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed$WT_XBB15_fold_change)
+Baseline_VOC_CKDHC_Removed$WT_XBB15_fold_change_log10[is.infinite(Baseline_VOC_CKDHC_Removed$WT_XBB15_fold_change_log10)] <- 1
+# Time_Vaccine interaction
+Baseline_VOC_CKDHC_Removed$Time_Vaccine <- interaction(Baseline_VOC_CKDHC_Removed$time_point_final, Baseline_VOC_CKDHC_Removed$BivalentVaccineType)
+
+rndr <- function(x, name, ...) {
+  if (length(x) == 0) {
+  } else {
+    render.default(x=x, name=name, digits=4, ...)
+  }
+}
+
+render.continuous.custom <- function(x, ...) {
+  attr(x, "label") <- NULL
+  c("",
+    "Mean (SD)" = paste0(format(round(mean(x, na.rm = T), 5), nsmall = 2)," (", format(round(sd(x, na.rm = T), 5), nsmall = 2),")"), 
+    "Median (IQR)" = paste0(format(round(median(x, na.rm = T), 5), nsmall = 2)," (", format(round(IQR(x, na.rm = T),   5), nsmall = 2),")"), 
+    "[25% Quantile, 75% Quantile]"   = paste0("[", format(round(quantile(x, 0.25, na.rm = T), 5), nsmall = 2), ", ", format(round(quantile(x, 0.75, na.rm = T), 5), nsmall = 2),"]")
+  )
+}
+
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed[,grepl("fold_change",colnames(Baseline_VOC_CKDHC_Removed))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | Time_Vaccine, ",
+                      "data=Baseline_VOC_CKDHC_Removed, droplevels=F, render=rndr,render.continuous = render.continuous.custom,",
+                      "overall='Overall', ",
+                      "caption = 'Fold changes for BA.1, BA.5, BQ1.1 and XBB.1.5 comparing to the wild-type')", sep="")))
+```
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed_plot <- Baseline_VOC_CKDHC_Removed[,c("Study_ID2","WT_BA1_fold_change","WT_BA5_fold_change","WT_BQ11_fold_change","WT_XBB15_fold_change","Time_Vaccine")] 
+
+Baseline_VOC_CKDHC_Removed_plot_long <- melt(Baseline_VOC_CKDHC_Removed_plot, id.vars=c("Study_ID2","Time_Vaccine"))
+
+p<-ggplot(data = Baseline_VOC_CKDHC_Removed_plot_long, mapping = aes(x = value)) + geom_histogram(bins=15) +
+  facet_wrap(Time_Vaccine~variable, labeller=label_value, nrow=4, ncol = 4, scales = "free") +
+  ggtitle("Histogram for ID50 fold changes of ID50 BA.1, BA.5, BQ1.1 and XBB.1.5 with wild-type") +
+  labs(x="Fold Changes",y="Count")
+p 
+```
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed_plot <- Baseline_VOC_CKDHC_Removed[,c("Study_ID2","WT_BA1_fold_change_log10","WT_BA5_fold_change_log10","WT_BQ11_fold_change_log10","WT_XBB15_fold_change_log10","Time_Vaccine")] 
+
+Baseline_VOC_CKDHC_Removed_plot_long <- melt(Baseline_VOC_CKDHC_Removed_plot, id.vars=c("Study_ID2","Time_Vaccine"))
+
+p<-ggplot(data = Baseline_VOC_CKDHC_Removed_plot_long, mapping = aes(x = value)) + geom_histogram(bins=15) +
+  facet_wrap(Time_Vaccine~variable, labeller=label_value, nrow=4, ncol = 4, scales = "free") +
+  ggtitle("Histogram for log10 fold changes of ID50 BA.1, BA.5, BQ1.1 and XBB.1.5 with wild-type") +
+  labs(x="Fold Changes",y="Count")
+p
+```
+```{r, echo = TRUE, results = TRUE}
+Baseline_VOC_CKDHC_Removed_1month <- Baseline_VOC_CKDHC_Removed[Baseline_VOC_CKDHC_Removed$time_point_final=="BV Dose +1 month",]
+
+rndr <- function(x, name, ...) {
+  if (length(x) == 0) {
+  } else {
+    render.default(x=x, name=name, digits=4, ...)
+  }
+}
+
+render.continuous.custom <- function(x, ...) {
+  attr(x, "label") <- NULL
+  c("",
+    "Mean (SD)" = paste0(format(round(mean(x, na.rm = T), 5), nsmall = 2)," (", format(round(sd(x, na.rm = T), 5), nsmall = 2),")"), 
+    "Median (IQR)" = paste0(format(round(median(x, na.rm = T), 5), nsmall = 2)," (", format(round(IQR(x, na.rm = T),   5), nsmall = 2),")"), 
+    "[25% Quantile, 75% Quantile]"   = paste0("[", format(round(quantile(x, 0.25, na.rm = T), 5), nsmall = 2), ", ", format(round(quantile(x, 0.75, na.rm = T), 5), nsmall = 2),"]")
+  )
+}
+
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_1month[,grepl("fold_change",colnames(Baseline_VOC_CKDHC_Removed_1month))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " , ",
+                      "data=Baseline_VOC_CKDHC_Removed_1month, droplevels=F, render=rndr,render.continuous = render.continuous.custom,",
+                      "overall='Overall', ",
+                      "caption = 'Fold changes for BA.1, BA.5, BQ1.1 and XBB.1.5 comparing to the wild-type for BV Dose 1 + Month of both Moderna/Pfizer combined')", sep="")))
+```
+```{r, echo = TRUE, results = TRUE}
+# Calculate fold changes 
+Baseline_VOC_CKDHC_Removed_Wide$WT_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`WT_ID50.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`WT_ID50.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$BA1_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`BA1_ID50.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`BA1_ID50.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$BA5_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`BA5_ID50.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`BA5_ID50.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$BQ11_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`BQ11_ID50.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`BQ11_ID50.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$XBB15_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`XBB15_ID50.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`XBB15_ID50.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$XBB15_fold_change[is.infinite(Baseline_VOC_CKDHC_Removed_Wide$XBB15_fold_change)] <- 1
+
+# Calculate Serum fold changes 
+Baseline_VOC_CKDHC_Removed_Wide$WT_Serum_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`WT_Serum.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`WT_Serum.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$BA1_Serum_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`BA1_Serum.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`BA1_Serum.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$BA5_Serum_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`BA5_Serum.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`BA5_Serum.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$BQ11_Serum_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`BQ11_Serum.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`BQ11_Serum.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$XBB15_Serum_fold_change <- Baseline_VOC_CKDHC_Removed_Wide$`XBB15_Serum.BV Dose +1 month`/Baseline_VOC_CKDHC_Removed_Wide$`XBB15_Serum.BV Pre-Dose`
+Baseline_VOC_CKDHC_Removed_Wide$XBB15_Serum_fold_change[is.infinite(Baseline_VOC_CKDHC_Removed_Wide$XBB15_Serum_fold_change)] <- 1
+
+# Log-transformed fold changes (log base 10) 
+Baseline_VOC_CKDHC_Removed_Wide$WT_fold_change_log10  <- log10(Baseline_VOC_CKDHC_Removed_Wide$WT_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$BA1_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed_Wide$BA1_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$BA5_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed_Wide$BA5_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$BQ11_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed_Wide$BQ11_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$XBB15_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed_Wide$XBB15_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$XBB15_fold_change_log10[is.infinite(Baseline_VOC_CKDHC_Removed_Wide$XBB15_fold_change_log10)] <- 1
+
+# Log-transformed fold changes (log base 10) --- Serum fold changes
+Baseline_VOC_CKDHC_Removed_Wide$WT_Serum_fold_change_log10  <- log10(Baseline_VOC_CKDHC_Removed_Wide$WT_Serum_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$BA1_Serum_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed_Wide$BA1_Serum_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$BA5_Serum_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed_Wide$BA5_Serum_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$BQ11_Serum_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed_Wide$BQ11_Serum_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$XBB15_Serum_fold_change_log10 <- log10(Baseline_VOC_CKDHC_Removed_Wide$XBB15_Serum_fold_change)
+Baseline_VOC_CKDHC_Removed_Wide$XBB15_Serum_fold_change_log10[is.infinite(Baseline_VOC_CKDHC_Removed_Wide$XBB15_Serum_fold_change_log10)] <- 1
+
+rndr <- function(x, name, ...) {
+  if (length(x) == 0) {
+    y <- Baseline_VOC_CKDHC_Removed_Wide[[name]]
+    s <- rep("", length(render.default(x=y, name=name, ...)))
+    if (is.numeric(y)) {
+      p <- t.test(y ~ Baseline_VOC_CKDHC_Removed_Wide$BivalentVaccineType)$p.value
+    } else {
+      p <- fisher.test(table(y, droplevels(Baseline_VOC_CKDHC_Removed_Wide$BivalentVaccineType)))$p.value
+    }
+    s[2] <- sub("<", "&lt;", format.pval(p, digits=3, eps=0.001))
+    s
+  } else {
+    render.default(x=x, name=name, ...)
+  }
+}
+rndr.strat <- function(label, n, ...) {
+  ifelse(n==0, label, render.strat.default(label, n, ...))
+}
+
+render.continuous.custom <- function(x, ...) {
+  attr(x, "label") <- NULL
+  c("",
+    "Mean (SD)" = paste0(format(round(mean(x, na.rm = T), 5), nsmall = 2)," (", format(round(sd(x, na.rm = T), 5), nsmall = 2),")"), 
+    "Median (IQR)" = paste0(format(round(median(x, na.rm = T), 5), nsmall = 2)," (", format(round(IQR(x, na.rm = T),   5), nsmall = 2),")"), 
+    "[25% Quantile, 75% Quantile]"   = paste0("[", format(round(quantile(x, 0.25, na.rm = T), 5), nsmall = 2), ", ", format(round(quantile(x, 0.75, na.rm = T), 5), nsmall = 2),"]")
+  )
+}
+
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_Wide[,grepl("fold_change",colnames(Baseline_VOC_CKDHC_Removed_Wide))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | BivalentVaccineType, ",
+                      "data=Baseline_VOC_CKDHC_Removed_Wide, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom,",
+                      "overall='Overall', ",
+                      "caption = 'Fold changes for WT, BA.1, BA.5, BQ1.1 and XBB.1.5 after 1 month bivalent dose grouped by bivalent vaccine type')", sep="")))
+```
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed_Wide_plot<-Baseline_VOC_CKDHC_Removed_Wide[,c("Study_ID2","WT_fold_change_log10","BA1_fold_change_log10","BA5_fold_change_log10","BQ11_fold_change_log10","XBB15_fold_change_log10")] 
+
+Baseline_VOC_CKDHC_Removed_Wide_plot_long <- melt(Baseline_VOC_CKDHC_Removed_Wide_plot, id.vars=c("Study_ID2"))
+
+p<-ggplot(data = Baseline_VOC_CKDHC_Removed_Wide_plot_long, mapping = aes(x = value)) + geom_histogram(bins=15) +
+  facet_wrap(~variable, labeller=label_both, nrow=5, ncol = 1, scales = "free") +
+  ggtitle("Histogram for Log10 fold change from Pre-Bivalent Dose to Bivalent Dose + 1 month") +
+  labs(x="Log10 Transformed Fold Change Outcomes",y="Count")
+p
+```
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed_Wide$DoseBivalentVaccine_fac <- factor((Baseline_VOC_CKDHC_Removed_Wide$`DoseBivalentVaccine.BV Dose +1 month`), levels=c(4,5,"P-Value"), labels=c("4","5","P-Value"))
+rndr <- function(x, name, ...) {
+  if (length(x) == 0) {
+    y <- Baseline_VOC_CKDHC_Removed_Wide[[name]]
+    s <- rep("", length(render.default(x=y, name=name, ...)))
+    if (is.numeric(y)) {
+      p <- t.test(y ~ Baseline_VOC_CKDHC_Removed_Wide$DoseBivalentVaccine_fac)$p.value
+    } else {
+      p <- fisher.test(table(y, droplevels(Baseline_VOC_CKDHC_Removed_Wide$DoseBivalentVaccine_fac)))$p.value
+    }
+    s[2] <- sub("<", "&lt;", format.pval(p, digits=3, eps=0.001))
+    s
+  } else {
+    render.default(x=x, name=name, ...)
+  }
+}
+
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_Wide[,grepl("fold_change",colnames(Baseline_VOC_CKDHC_Removed_Wide))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | DoseBivalentVaccine_fac, ",
+                      "data=Baseline_VOC_CKDHC_Removed_Wide, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom,",
+                      "overall='Overall', ",
+                      "caption = 'Fold changes for WT, BA.1, BA.5, BQ1.1 and XBB.1.5 after 1 month bivalent dose grouped by number of vaccine doses')", sep="")))
+```
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed_Wide$NPPositive_fac <- factor((Baseline_VOC_CKDHC_Removed_Wide$`NP_positive_ELISA.BV Pre-Dose`), levels=c("No","Yes", "P-Value"),  labels=c("No","Yes","P-Value"))
+rndr <- function(x, name, ...) {
+  if (length(x) == 0) {
+    y <- Baseline_VOC_CKDHC_Removed_Wide[[name]]
+    s <- rep("", length(render.default(x=y, name=name, ...)))
+    if (is.numeric(y)) {
+      p <- t.test(y ~ Baseline_VOC_CKDHC_Removed_Wide$NPPositive_fac)$p.value
+    } else {
+      p <- fisher.test(table(y, droplevels(Baseline_VOC_CKDHC_Removed_Wide$NPPositive_fac)))$p.value
+    }
+    s[2] <- sub("<", "&lt;", format.pval(p, digits=3, eps=0.001))
+    s
+  } else {
+    render.default(x=x, name=name, ...)
+  }
+}
+
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_Wide[,grepl("fold_change",colnames(Baseline_VOC_CKDHC_Removed_Wide))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | NPPositive_fac, ",
+                      "data=Baseline_VOC_CKDHC_Removed_Wide, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom,",
+                      "overall='Overall', ",
+                      "caption = 'Fold changes for WT, BA.1, BA.5, BQ1.1 and XBB.1.5 after 1 month bivalent dose grouped by NP positive status')", sep="")))
+```
+```{r, warning = FALSE}
+Baseline_VOC_CKDHC_Removed_Wide$BivalentVaccineType_fac <- factor((Baseline_VOC_CKDHC_Removed_Wide$`BivalentVaccineType.BV Dose +1 month`), levels=c("Pfizer","Moderna","P-Value"), labels=c("Pfizer","Moderna","P-Value"))
+rndr <- function(x, name, ...) {
+  if (length(x) == 0) {
+    y <- Baseline_VOC_CKDHC_Removed_Wide[[name]]
+    s <- rep("", length(render.default(x=y, name=name, ...)))
+    if (is.numeric(y)) {
+      p <- t.test(y ~ Baseline_VOC_CKDHC_Removed_Wide$BivalentVaccineType_fac)$p.value
+    } else {
+      p <- fisher.test(table(y, droplevels(Baseline_VOC_CKDHC_Removed_Wide$BivalentVaccineType_fac)))$p.value
+    }
+    s[2] <- sub("<", "&lt;", format.pval(p, digits=3, eps=0.001))
+    s
+  } else {
+    render.default(x=x, name=name, ...)
+  }
+}
+
+table1_formula <- paste("`", paste(colnames(Baseline_VOC_CKDHC_Removed_Wide[,grepl("fold_change",colnames(Baseline_VOC_CKDHC_Removed_Wide))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | BivalentVaccineType_fac, ",
+                      "data=Baseline_VOC_CKDHC_Removed_Wide, droplevels=F, render=rndr, render.strat=rndr.strat, render.continuous = render.continuous.custom,",
+                      "overall='Overall', ",
+                      "caption = 'Fold changes for WT, BA.1, BA.5, BQ1.1 and XBB.1.5 after 1 month bivalent dose grouped by vaccine type')", sep="")))
+```
+# Descriptive statistics for ELISA data set
+
+```{r, echo = TRUE, results = TRUE}
+BV_VLP_ELISA$VaccineType_time <- interaction(BV_VLP_ELISA$Bivalent.Vaccine.Type, BV_VLP_ELISA$time_point_final)
+
+rndr.strat <- function(label, n, ...) {
+  ifelse(n==0, label, render.strat.default(label, n, ...))
+}
+
+render.continuous.custom <- function(x, ...) {
+  attr(x, "label") <- NULL
+  c("",
+    "Mean (SD)" = paste0(format(round(mean(x, na.rm = T), 5), nsmall = 2)," (", format(round(sd(x, na.rm = T), 5), nsmall = 2),")"), 
+    "Median (IQR)" = paste0(format(round(median(x, na.rm = T), 5), nsmall = 2)," (", format(round(IQR(x, na.rm = T),   5), nsmall = 2),")"), 
+    "[25% Quantile, 75% Quantile]"   = paste0("[", format(round(quantile(x, 0.25, na.rm = T), 5), nsmall = 2), ", ", format(round(quantile(x, 0.75, na.rm = T), 5), nsmall = 2),"]")
+  )
+}
+
+
+table1_formula <- paste("`", paste(colnames(BV_VLP_ELISA[,grepl(".IgG.|NP_positive_ELISA|Patient.Type",colnames(BV_VLP_ELISA))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | VaccineType_time, ",
+                      "data=BV_VLP_ELISA, droplevels=F,  render.strat=rndr.strat, render.continuous = render.continuous.custom, ",
+                      "overall='Overall', ",
+                      "caption = 'Anti-NP, Anti-RBD and Anti-Spike IgG relative ratio by bivalent vaccine type and time points')", sep="")))
+```
+
+## Anti-NP, Anti-RBD and Anti-Spike IgG relative ratio by bivalent time points
+
+```{r, echo = TRUE, results = TRUE}
+rndr.strat <- function(label, n, ...) {
+  ifelse(n==0, label, render.strat.default(label, n, ...))
+}
+
+render.continuous.custom <- function(x, ...) {
+  attr(x, "label") <- NULL
+  c("",
+    "Mean (SD)" = paste0(format(round(mean(x, na.rm = T), 5), nsmall = 2)," (", format(round(sd(x, na.rm = T), 5), nsmall = 2),")"), 
+    "Median (IQR)" = paste0(format(round(median(x, na.rm = T), 5), nsmall = 2)," (", format(round(IQR(x, na.rm = T),   5), nsmall = 2),")"), 
+    "[25% Quantile, 75% Quantile]"   = paste0("[", format(round(quantile(x, 0.25, na.rm = T), 5), nsmall = 2), ", ", format(round(quantile(x, 0.75, na.rm = T), 5), nsmall = 2),"]")
+  )
+}
+
+
+table1_formula <- paste("`", paste(colnames(BV_VLP_ELISA[,grepl(".IgG.|NP_positive_ELISA|Patient.Type",colnames(BV_VLP_ELISA))]), sep = "", collapse = "` + `"), "`", sep="")
+eval(parse(text=paste("table1(~ ", table1_formula, " | time_point_final, ",
+                      "data=BV_VLP_ELISA, droplevels=F,  render.strat=rndr.strat, render.continuous = render.continuous.custom, ",
+                      "overall='Overall', ",
+                      "caption = 'Anti-NP, Anti-RBD and Anti-Spike IgG relative ratio by time points')", sep="")))
+```
